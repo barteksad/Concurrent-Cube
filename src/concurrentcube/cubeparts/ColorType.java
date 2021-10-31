@@ -1,4 +1,4 @@
-package concurrentcube;
+package concurrentcube.cubeparts;
 
 public enum ColorType {
     ZERO,
