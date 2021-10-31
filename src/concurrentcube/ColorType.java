@@ -1,6 +1,6 @@
 package concurrentcube;
 
-public enum Color {
+public enum ColorType {
     ZERO,
     ONE,
     TWO,
