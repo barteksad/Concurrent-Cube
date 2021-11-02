@@ -1,5 +1,6 @@
 package concurrentcube;
 
+import java.nio.file.WatchService;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedList;
@@ -8,12 +9,15 @@ import java.util.concurrent.Semaphore;
 import java.util.function.BiConsumer;
 
 import concurrentcube.cubeparts.Block;
+import concurrentcube.cubeparts.ColorType;
 import concurrentcube.cubeparts.RotationDirection;
 import concurrentcube.cubeparts.SideType;
+import concurrentcube.cubeparts.SortSide;
 import concurrentcube.cubeparts.Vector3i;
 
 
 public class Cube {
+    private static char[] colorMapping = {'0', '1', '2', '3', '4', '5'};
 
     private int size;
     private ArrayList<Block> blocks;
@@ -42,7 +46,7 @@ public class Cube {
 
         this.layer_numbers = new ArrayList<Integer>();
         for(int i = - size / 2; i <= size / 2; i++) {
-            if (i == 0 && size % 2 == 1)
+            if (i == 0 && size % 2 == 0)
                 continue;
             layer_numbers.add(i);
         }
@@ -51,10 +55,7 @@ public class Cube {
         for(int z : layer_numbers) {
             for(int x : layer_numbers) {
                 for(int y : layer_numbers) {
-                    if(Math.abs(z) == size / 2) {
-                        blocks.add(new Block(new Vector3i(x, y, z)));
-                    }
-                    else if (Math.abs(x) == size / 2 || Math.abs(y) == size / 2) {
+                    if (Math.abs(x) == size / 2 || Math.abs(y) == size / 2 || Math.abs(z) == size / 2) {
                         blocks.add(new Block(new Vector3i(x, y, z)));
                     }
                 }
@@ -62,6 +63,7 @@ public class Cube {
         }
 
         taskStarterThread = new Thread(new TaskStarter());
+        taskStarterThread.setDaemon(true);
         taskStarterThread.start();
     }
 
@@ -77,8 +79,6 @@ public class Cube {
     }
     private class TaskStarter implements Runnable {
 
-        private List<Thread> runningTasks = new LinkedList<Thread>();
-
         @Override
         public void run() {
             while(true) {
@@ -88,15 +88,10 @@ public class Cube {
                     break;
                 }
 
-                for(Thread t : runningTasks)
-                    if(!t.isAlive())
-                        runningTasks.remove(t);
-
                 for(Task t : taskQueue) {
                     if(checkBlocksAvailibilityAndPossiblyLock(t.blocksToPerformOn())) {
-                        Thread taskThread = new Thread(t);
-                        taskThread.start();
-                        runningTasks.add(taskThread);
+                        t.release();
+                        taskQueue.remove(t);
                     }
                     else
                         break;
@@ -106,93 +101,177 @@ public class Cube {
         
     }
 
-    private abstract class Task implements Runnable {
-        protected ArrayList<Block> blocksToPerformOn;
+    private class Task {
+        private ArrayList<Block> blocksToPerformOn;
+        private Semaphore semaphore;
+
+        public Task(ArrayList<Block> blocksToPerformOn, Semaphore semaphore) {
+            this.blocksToPerformOn = blocksToPerformOn;
+            this.semaphore = semaphore;
+        }
 
         public ArrayList<Block> blocksToPerformOn() {
             return blocksToPerformOn;
         }
+
+        public void release() {
+            semaphore.release();
+        }
     }
 
-    private class RotationPerformer extends Task implements Runnable {
 
-        private int side;
-        private int layer;
-
-        private RotationDirection direction;
-        private SideType side_type;
-
-        public RotationPerformer(int side, int layer) {
-            super();
-
-            this.side = side;
-            this.layer = layer;
+    public void rotate(int side, int layer) throws InterruptedException {
 
             int decoded_layer;
-            
-            side_type = SideType.values()[side];
+            RotationDirection direction;
+            SideType side_type = SideType.values()[side];
+
             switch (side_type) {
                 case UP, FRONT, RIGHT:
                     decoded_layer = layer_numbers.get(size - layer - 1);
-                    direction = RotationDirection.CLOCKWISE;
+                    direction = RotationDirection.ANTI_CLOCKWISE;
                     break;
                 case BOTTOM, BACK, LEFT:
                     decoded_layer = layer_numbers.get(layer);
-                    direction = RotationDirection.ANTI_CLOCKWISE;
+                    direction = RotationDirection.CLOCKWISE;
+                    break;
                 default:
+                    // to disable warnings
+                    direction = RotationDirection.CLOCKWISE;
                     decoded_layer = 0;
                     assert(false);
             }
 
-            ArrayList<Block> gathered = new ArrayList<Block>();
+            ArrayList<Block> blocksToPerformOn = new ArrayList<Block>();
             for(Block b : blocks) {
                 switch (side_type) {
                     case UP, BOTTOM:
                         if (b.z() != decoded_layer)
                             continue;
+                        else
+                            break;
                     case LEFT, RIGHT:
                         if (b.y() != decoded_layer)
                             continue;
+                        else
+                            break;
                     case FRONT, BACK:
                         if (b.x() != decoded_layer)
                             continue;
+                        else
+                            break;
+                    default:
+                        assert(false);
                 }
-                gathered.add(b);
-
-                blocksToPerformOn = gathered;
+                blocksToPerformOn.add(b);
             }
-        }
 
-        @Override
-        public void run() {
+            Semaphore waitUntilBlocksAvailable = new Semaphore(0);
+            Task task = new Task(blocksToPerformOn, waitUntilBlocksAvailable);
+            taskQueue.add(task);
+
+            waitUntilFinishedOrAdded.release();
+
+            waitUntilBlocksAvailable.acquire();
+
+            
             beforeRotation.accept(side, layer);
 
             for(Block b : blocksToPerformOn)
                 switch (side_type) {
+
                     case UP, BOTTOM:
                         b.rotateZ(direction);
+                        break;
+        
                     case LEFT, RIGHT:
                         b.rotateY(direction);
+                        break;
+
                     case FRONT, BACK:
                         b.rotateX(direction);
+                        break;
+                    
+                    default:
+                        assert(false);
                 }
+
+            afterRotation.accept(side, layer);
 
             for(Block b : blocksToPerformOn)
                 b.unlock();
 
-            afterRotation.accept(side, layer);
 
             waitUntilFinishedOrAdded.release();
-        }
-        
-    }
-
-    public void rotate(int side, int layer) throws InterruptedException {
-        ;
     }
 
     public String show() throws InterruptedException {
-        return "";
+
+        ArrayList<Block> blocksToPerformOn = blocks;
+        Semaphore waitUntilBlocksAvailable = new Semaphore(0);
+        Task task = new Task(blocksToPerformOn, waitUntilBlocksAvailable);
+        taskQueue.add(task);
+
+        waitUntilFinishedOrAdded.release();
+
+        waitUntilBlocksAvailable.acquire();
+
+
+        beforeShowing.run();
+
+        StringBuilder acc = new StringBuilder();
+        for(SideType side : SideType.values()) {
+
+            ArrayList<Block> sideBlockToSort = new ArrayList<Block>();
+
+            for(Block b : blocksToPerformOn) {
+                switch (side) {
+                    case UP:
+                        if (b.z() == layer_numbers.get(size - 1))
+                            sideBlockToSort.add(b);
+                        break;
+                    case LEFT:
+                        if (b.y() == layer_numbers.get(0))
+                            sideBlockToSort.add(b);
+                            break;
+                    case FRONT:
+                        if (b.x() == layer_numbers.get(size - 1))
+                            sideBlockToSort.add(b);
+                            break;
+                    case RIGHT:
+                        if (b.y() == layer_numbers.get(size - 1))
+                            sideBlockToSort.add(b);
+                            break;
+                    case BACK:
+                        if(b.x() == layer_numbers.get(0))
+                            sideBlockToSort.add(b);
+                            break;
+                    case BOTTOM:
+                        if (b.z() == layer_numbers.get(0))
+                            sideBlockToSort.add(b);
+                            break;
+                    default:
+                        assert(false);
+                }
+            }
+
+            Collections.sort(sideBlockToSort, new SortSide(side));
+            Collections.reverse(sideBlockToSort);
+            
+            for(Block b : sideBlockToSort) {
+                ColorType color = b.getFaceColor(side);
+                acc.append(colorMapping[color.ordinal()]);
+            }
+        }
+
+        afterShowing.run();
+
+        for(Block b : blocksToPerformOn)
+            b.unlock();
+        
+        waitUntilFinishedOrAdded.release();
+
+        return acc.toString();
     }
 
     
