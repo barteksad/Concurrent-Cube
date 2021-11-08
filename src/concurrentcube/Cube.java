@@ -233,23 +233,23 @@ public class Cube {
                     case LEFT:
                         if (b.y() == layer_numbers.get(0))
                             sideBlockToSort.add(b);
-                            break;
+                        break;
                     case FRONT:
                         if (b.x() == layer_numbers.get(size - 1))
                             sideBlockToSort.add(b);
-                            break;
+                        break;
                     case RIGHT:
                         if (b.y() == layer_numbers.get(size - 1))
                             sideBlockToSort.add(b);
-                            break;
+                        break;
                     case BACK:
                         if(b.x() == layer_numbers.get(0))
                             sideBlockToSort.add(b);
-                            break;
+                        break;
                     case BOTTOM:
                         if (b.z() == layer_numbers.get(0))
                             sideBlockToSort.add(b);
-                            break;
+                        break;
                     default:
                         assert(false);
                 }
