@@ -5,6 +5,15 @@ import concurrentcube.Cube;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadLocalRandom;
+
 import org.junit.Test;
 
 public class Tests {
@@ -88,15 +97,17 @@ public class Tests {
         "555" +
         "555";
 
-    public static void main(String[] args) {
-        assertDoesNotThrow(() -> Tests.basic());
+    // public static void main(String[] args) {
+    //     // assertDoesNotThrow(() -> Tests.basic());
+    //     // assertDoesNotThrow(() -> Tests.testConcurrent1());
+    //     assertDoesNotThrow(() -> Tests.testConcurrent2());
 
 
-        System.out.println("==================== TESTS PASSED! ====================");
-    }
+    //     System.out.println("==================== TESTS PASSED! ====================");
+    // }
 
     @Test
-    private static void basic() throws InterruptedException {
+    public void basic() throws InterruptedException {
 
             var rotation_counter = new Object() { int value = 0; };
             var show_counter = new Object() { int value = 0; };
@@ -165,5 +176,152 @@ public class Tests {
 
             assertEquals(before, after);
     }
+
+    private class Mover1 implements Runnable {
+
+        private Cube cube;
+
+        public Mover1(Cube cube) {
+            this.cube = cube;
+        }
+
+        @Override
+        public void run() {
+            try {
+                cube.rotate(0, 0);
+                Thread.sleep(100);
+                cube.rotate(1, 0);
+                Thread.sleep(100);
+                cube.rotate(2, 0);
+                Thread.sleep(100);
+                cube.rotate(3, 0);
+                Thread.sleep(100);
+                cube.rotate(4, 0);
+                Thread.sleep(100);
+                cube.rotate(5, 0);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    @Test
+    public void testConcurrent1() throws InterruptedException {
+        List<Integer> sides = Collections.synchronizedList(new ArrayList<>());
+        List<Integer> layers = Collections.synchronizedList(new ArrayList<>());
+
+        Cube n3x3 = new Cube(3,                
+            (x, y) -> { sides.add(x); layers.add(y); },
+            (x, y) -> { ; },
+            () -> { ; },
+            () -> { ; } 
+        );
+        
+        List<Thread> workers = new ArrayList<Thread>();
+
+        int how_many_times = 100;
+        for(int i = 0; i < how_many_times; i ++)
+            workers.add(new Thread(new Mover1(n3x3)));
+
+        for(Thread t: workers)
+            t.start();
     
+        for(Thread t: workers)
+            t.join();
+
+        assertEquals(how_many_times * 6, sides.size());
+
+        Cube n3x3_ground_true = new Cube(3,                
+            (x, y) -> { ; },
+            (x, y) -> { ; },
+            () -> { ; },
+            () -> { ; } 
+        );
+
+        for(int i = 0; i < layers.size(); i++) {
+            n3x3_ground_true.rotate(sides.get(i), layers.get(i));
+        }
+
+        assertEquals(n3x3_ground_true.show(), n3x3.show());
+    }
+
+    private class RandomMover implements Runnable {
+
+        private Cube cube;
+        private int size;
+        private int n_moves;
+
+        public RandomMover(Cube cube, int size, int n_moves) {
+            this.cube = cube;
+            this.size = size;
+            this.n_moves = n_moves;
+        }
+
+        @Override
+        public void run() {
+            for(int i = 0; i < n_moves; i++) {
+                int side = ThreadLocalRandom.current().nextInt(0, 6);
+                int layer = ThreadLocalRandom.current().nextInt(0, size);
+
+                try {
+                    cube.rotate(side, layer);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+
+    @Test
+    public void testConcurrent2() throws InterruptedException {
+
+        int[] sizes = {1, 3, 7, 16};
+
+        for(int size : sizes) {
+
+            List<Integer> sides = Collections.synchronizedList(new ArrayList<>());
+            List<Integer> layers = Collections.synchronizedList(new ArrayList<>());
+            Semaphore s1 = new Semaphore(1);
+    
+            Cube cube = new Cube(size,                
+                (x, y) -> {
+                    try {
+                        s1.acquire();
+                    } catch (InterruptedException e) {};
+                    sides.add(x); layers.add(y);
+                    s1.release();
+                },
+                (x, y) -> { ; },
+                () -> { ; },
+                () -> { ; } 
+            );
+
+            List<Thread> workers = new ArrayList<Thread>();
+
+            int how_many_workers = 15;
+            for(int i = 0; i < how_many_workers; i ++)
+                workers.add(new Thread(new RandomMover(cube, size, 100)));
+                
+                
+            for(Thread t: workers)
+                t.start();
+            
+            for(Thread t: workers)
+                t.join();
+                            
+            Cube cube_ground_true = new Cube(size,                
+                (x, y) -> { ; },
+                (x, y) -> { ; },
+                () -> { ; },
+                () -> { ; } 
+            );
+            
+            for(int i = 0; i < layers.size(); i++) {
+                cube_ground_true.rotate(sides.get(i), layers.get(i));
+            }
+            
+            assertEquals(cube_ground_true.show(), cube.show());
+        }
+    }
 }

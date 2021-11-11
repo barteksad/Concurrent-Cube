@@ -1,6 +1,5 @@
 package concurrentcube;
 
-import java.nio.file.WatchService;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedList;
@@ -9,6 +8,7 @@ import java.util.concurrent.Semaphore;
 import java.util.function.BiConsumer;
 
 import concurrentcube.cubeparts.Block;
+import concurrentcube.cubeparts.BoolBlock;
 import concurrentcube.cubeparts.ColorType;
 import concurrentcube.cubeparts.RotationDirection;
 import concurrentcube.cubeparts.SideType;
@@ -22,6 +22,7 @@ public class Cube {
     private int size;
     private ArrayList<Block> blocks;
     private ArrayList<Integer> layer_numbers;
+    private ArrayList<BoolBlock> blocks_availibility;
 
     private BiConsumer<Integer, Integer> beforeRotation;
     private BiConsumer<Integer, Integer> afterRotation;
@@ -52,11 +53,13 @@ public class Cube {
         }
             
         this.blocks = new ArrayList<Block>();
+        this.blocks_availibility = new ArrayList<>();
         for(int z : layer_numbers) {
             for(int x : layer_numbers) {
                 for(int y : layer_numbers) {
                     if (Math.abs(x) == size / 2 || Math.abs(y) == size / 2 || Math.abs(z) == size / 2) {
                         blocks.add(new Block(new Vector3i(x, y, z)));
+                        blocks_availibility.add(new BoolBlock(new Vector3i(x, y, z)));
                     }
                 }
             }
@@ -67,12 +70,12 @@ public class Cube {
         taskStarterThread.start();
     }
 
-    private boolean checkBlocksAvailibilityAndPossiblyLock(ArrayList<Block> blocksToPerformOn) {
-        for(Block b : blocksToPerformOn)
+    private boolean checkBlocksAvailibilityAndPossiblyLock(ArrayList<BoolBlock> blocksToPerformOnAvailibility) {
+        for(BoolBlock b : blocksToPerformOnAvailibility)
             if(!b.is_available())
                 return false;
 
-        for(Block b : blocksToPerformOn)
+        for(BoolBlock b : blocksToPerformOnAvailibility)
             b.lock();
         
         return true;
@@ -88,30 +91,32 @@ public class Cube {
                     break;
                 }
 
-                for(Task t : taskQueue) {
-                    if(checkBlocksAvailibilityAndPossiblyLock(t.blocksToPerformOn())) {
+                for(int i = 0; i < taskQueue.size(); i++) {
+                    Task t = taskQueue.get(i);
+                    if(checkBlocksAvailibilityAndPossiblyLock(t.blocksToPerformOnAvailibility())) {
                         t.release();
                         taskQueue.remove(t);
                     }
                     else
                         break;
                 }
+
             }
         }
         
     }
 
     private class Task {
-        private ArrayList<Block> blocksToPerformOn;
+        private ArrayList<BoolBlock> blocksToPerformOnAvailibility;
         private Semaphore semaphore;
 
-        public Task(ArrayList<Block> blocksToPerformOn, Semaphore semaphore) {
-            this.blocksToPerformOn = blocksToPerformOn;
+        public Task(Semaphore semaphore, ArrayList<BoolBlock> blocksToPerformOnAvailibility) {
             this.semaphore = semaphore;
+            this.blocksToPerformOnAvailibility = blocksToPerformOnAvailibility;
         }
 
-        public ArrayList<Block> blocksToPerformOn() {
-            return blocksToPerformOn;
+        public ArrayList<BoolBlock> blocksToPerformOnAvailibility() {
+            return blocksToPerformOnAvailibility;
         }
 
         public void release() {
@@ -142,42 +147,74 @@ public class Cube {
                     assert(false);
             }
 
-            ArrayList<Block> blocksToPerformOn = new ArrayList<Block>();
-            for(Block b : blocks) {
+            ArrayList<BoolBlock> blocksToPerformOnAvailibility = new ArrayList<>();
+            for(BoolBlock b : blocks_availibility)
                 switch (side_type) {
                     case UP, BOTTOM:
                         if (b.z() != decoded_layer)
                             continue;
                         else
-                            break;
+                            blocksToPerformOnAvailibility.add(b);
+                            continue;
                     case LEFT, RIGHT:
                         if (b.y() != decoded_layer)
                             continue;
                         else
-                            break;
+                            blocksToPerformOnAvailibility.add(b);
+                            continue;
                     case FRONT, BACK:
                         if (b.x() != decoded_layer)
                             continue;
                         else
-                            break;
+                            blocksToPerformOnAvailibility.add(b);
+                            continue;
                     default:
                         assert(false);
                 }
-                blocksToPerformOn.add(b);
-            }
+
 
             Semaphore waitUntilBlocksAvailable = new Semaphore(0);
-            Task task = new Task(blocksToPerformOn, waitUntilBlocksAvailable);
+            Task task = new Task(waitUntilBlocksAvailable, blocksToPerformOnAvailibility);
             taskQueue.add(task);
 
             waitUntilFinishedOrAdded.release();
 
             waitUntilBlocksAvailable.acquire();
-
+            // try {
+            // } catch (InterruptedException e) {
+            //     taskQueue.remove(task);
+            //     throw e;
+            // }
             
             beforeRotation.accept(side, layer);
 
-            for(Block b : blocksToPerformOn)
+            ArrayList<Block> blocksToPerformOn = new ArrayList<Block>();
+            for(Block b : blocks) 
+                switch (side_type) {
+                    case UP, BOTTOM:
+                        if (b.z() != decoded_layer)
+                            continue;
+                        else
+                            blocksToPerformOn.add(b);
+                            continue;
+                    case LEFT, RIGHT:
+                        if (b.y() != decoded_layer)
+                            continue;
+                        else
+                            blocksToPerformOn.add(b);
+                            continue;
+                    case FRONT, BACK:
+                        if (b.x() != decoded_layer)
+                            continue;
+                        else
+                            blocksToPerformOn.add(b);
+                            continue;
+                    default:
+                        assert(false);
+                }
+
+
+            for(Block b : blocksToPerformOn) {
                 switch (side_type) {
 
                     case UP, BOTTOM:
@@ -195,10 +232,11 @@ public class Cube {
                     default:
                         assert(false);
                 }
+            }
 
             afterRotation.accept(side, layer);
 
-            for(Block b : blocksToPerformOn)
+            for(BoolBlock b : blocksToPerformOnAvailibility)
                 b.unlock();
 
 
@@ -207,17 +245,24 @@ public class Cube {
 
     public String show() throws InterruptedException {
 
-        ArrayList<Block> blocksToPerformOn = blocks;
+        ArrayList<BoolBlock> blocksToPerformOnAvailibility = blocks_availibility;
         Semaphore waitUntilBlocksAvailable = new Semaphore(0);
-        Task task = new Task(blocksToPerformOn, waitUntilBlocksAvailable);
+
+        Task task = new Task(waitUntilBlocksAvailable, blocksToPerformOnAvailibility);
         taskQueue.add(task);
 
         waitUntilFinishedOrAdded.release();
 
-        waitUntilBlocksAvailable.acquire();
-
+        try {
+            waitUntilBlocksAvailable.acquire();
+        } catch (InterruptedException e) {
+            taskQueue.remove(task);
+            throw e;
+        }
 
         beforeShowing.run();
+
+        ArrayList<Block> blocksToPerformOn = blocks;
 
         StringBuilder acc = new StringBuilder();
         for(SideType side : SideType.values()) {
@@ -264,10 +309,11 @@ public class Cube {
             }
         }
 
+        for(BoolBlock b : blocksToPerformOnAvailibility)
+            b.unlock();
+
         afterShowing.run();
 
-        for(Block b : blocksToPerformOn)
-            b.unlock();
         
         waitUntilFinishedOrAdded.release();
 

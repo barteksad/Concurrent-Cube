@@ -49,13 +49,7 @@ public class Validate {
         );
 
         try {
-            // String state = cube.show();
-            // System.out.println(state + "\n\n");
 
-            // cube.rotate(5, 1);
-
-            // state = cube.show();
-            // System.out.println(state + "\n\n");
 
             cube.rotate(2, 0);
             cube.rotate(5, 1);
